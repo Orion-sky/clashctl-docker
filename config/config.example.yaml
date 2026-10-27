@@ -1,0 +1,213 @@
+# Clash Verge Rev (Mihomo) 完整配置
+# 用法:Verge「订阅」→ 新建 → Local,把本文件内容贴进去;
+# 或直接在「订阅」里导入订阅链接,再把 rules / dns 部分放进「全局扩展覆写」。
+
+mixed-port: 7897
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+unified-delay: true
+tcp-concurrent: true
+find-process-mode: strict
+
+geodata-mode: true
+geo-auto-update: true
+geo-update-interval: 24
+
+# ---- 内网 / 公司 / 家庭服务相关设置在这里改 ----
+# 1. 下面 rules 里的 "corp.example.com" 换成你自己的内网域名
+# 2. dns.nameserver-policy 里的 192.168.1.1 换成内网 DNS(路由器或公司 DNS)
+
+# 混合入站 + TUN(想全局接管就把 enable 改为 true,需在 Verge 里授予服务模式)
+tun:
+  enable: false
+  stack: mixed
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - any:53
+  # 内网网段不进 TUN,避免路由冲突(NAS、公司 VPN、Tailscale 等)
+  route-exclude-address:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
+    - 169.254.0.0/16
+
+# 嗅探:用域名而不是 IP 做分流,对 fake-ip 下的 HTTPS/QUIC 很重要
+sniffer:
+  enable: true
+  force-dns-mapping: true
+  parse-pure-ip: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+  skip-domain:
+    - "Mijia Cloud"
+    - "+.push.apple.com"
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  # 这些域名返回真实 IP,不走 fake-ip(内网服务、局域网发现、时间同步、STUN 等)
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "*.localdomain"
+    - "*.home.arpa"
+    - "*.corp.example.com"
+    - "+.stun.*.*"
+    - "+.stun.*.*.*"
+    - "time.*.com"
+    - "ntp.*.com"
+    - "+.ntp.org"
+    - "+.pool.ntp.org"
+    - "localhost.ptlogin2.qq.com"
+    - "+.srv.nintendo.net"
+    - "+.n.n.srv.nintendo.net"
+    - "+.msftconnecttest.com"
+    - "+.msftncsi.com"
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  # 国内域名走国内 DNS,境外域名走 DoH(经代理解析,避免污染)
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+  fallback:
+    - https://dns.google/dns-query
+    - https://cloudflare-dns.com/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+  # 内网域名用内网 DNS 解析(没有就删掉这一段)
+  nameserver-policy:
+    "+.corp.example.com": 192.168.1.1
+    "+.lan": 192.168.1.1
+    "+.home.arpa": 192.168.1.1
+
+proxies:
+  - name: 搬瓦工
+    type: vless
+    server: YOUR_SERVER_IP
+    port: 443
+    uuid: YOUR_UUID
+    network: tcp
+    udp: true
+    tls: true
+    flow: xtls-rprx-vision
+    servername: addons.mozilla.org
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: YOUR_REALITY_PUBLIC_KEY
+      short-id: YOUR_SHORT_ID
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies: [搬瓦工, DIRECT]
+
+  # 按服务拆组,以后有多个节点时可以单独切换
+  - name: AI
+    type: select
+    proxies: [PROXY, 搬瓦工]
+
+  - name: 国外媒体
+    type: select
+    proxies: [PROXY, DIRECT]
+
+  - name: 微软/苹果(国内可直连)
+    type: select
+    proxies: [DIRECT, PROXY]
+
+  - name: 漏网之鱼
+    type: select
+    proxies: [PROXY, DIRECT]
+
+rules:
+  # ---------- 1. 代理服务器自身直连,防止 TUN 下回环 ----------
+  - IP-CIDR,YOUR_SERVER_IP/32,DIRECT,no-resolve
+
+  # ---------- 2. 内网 / 局域网 / 本机,一律直连 ----------
+  - DOMAIN-SUFFIX,local,DIRECT
+  - DOMAIN-SUFFIX,lan,DIRECT
+  - DOMAIN-SUFFIX,localdomain,DIRECT
+  - DOMAIN-SUFFIX,home.arpa,DIRECT
+  - DOMAIN-SUFFIX,corp.example.com,DIRECT     # 改成你的内网域名
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve   # Tailscale / CGNAT
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - GEOIP,PRIVATE,DIRECT,no-resolve
+
+  # ---------- 3. 内网常见服务端口(访问 IP:端口 形式的 NAS、路由、数据库等) ----------
+  # 如果内网网段不在上面,可按需追加,例如:
+  # - IP-CIDR,10.20.0.0/16,DIRECT,no-resolve
+
+  # ---------- 4. 局域网发现 / 投屏 / 时间同步 ----------
+  - DST-PORT,123,DIRECT                       # NTP
+  - DST-PORT,5353,DIRECT                      # mDNS
+  - DST-PORT,1900,DIRECT                      # SSDP / UPnP
+
+  # ---------- 5. 广告拦截(可选) ----------
+  - GEOSITE,category-ads-all,REJECT
+
+  # ---------- 6. 国外 AI ----------
+  - GEOSITE,openai,AI
+  - GEOSITE,anthropic,AI
+  - DOMAIN-SUFFIX,claude.ai,AI
+  - DOMAIN-SUFFIX,anthropic.com,AI
+  - DOMAIN-SUFFIX,chatgpt.com,AI
+  - DOMAIN-SUFFIX,openai.com,AI
+  - DOMAIN-SUFFIX,gemini.google.com,AI
+  - DOMAIN-SUFFIX,x.ai,AI
+
+  # ---------- 7. 开发常用 ----------
+  - GEOSITE,github,PROXY
+  - GEOSITE,docker,PROXY
+  - GEOSITE,pypi,PROXY
+  - DOMAIN-SUFFIX,golang.org,PROXY
+  - DOMAIN-SUFFIX,rust-lang.org,PROXY
+
+  # ---------- 8. 国外媒体 / 社交 ----------
+  - GEOSITE,youtube,国外媒体
+  - GEOSITE,netflix,国外媒体
+  - GEOSITE,spotify,国外媒体
+  - GEOSITE,telegram,PROXY
+  - GEOSITE,twitter,PROXY
+  - GEOSITE,facebook,PROXY
+  - GEOIP,telegram,PROXY,no-resolve
+  - GEOIP,twitter,PROXY,no-resolve
+
+  # ---------- 9. 微软 / 苹果 / 游戏平台(国内有节点,直连更快) ----------
+  - GEOSITE,microsoft@cn,微软/苹果(国内可直连)
+  - GEOSITE,apple@cn,微软/苹果(国内可直连)
+  - GEOSITE,steam@cn,DIRECT
+  - GEOSITE,category-games@cn,DIRECT
+
+  # ---------- 10. 国外通用走代理 ----------
+  - GEOSITE,google,PROXY
+  - GEOSITE,geolocation-!cn,PROXY
+
+  # ---------- 11. 国内直连 ----------
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT,no-resolve
+
+  # ---------- 12. 兜底 ----------
+  - MATCH,漏网之鱼

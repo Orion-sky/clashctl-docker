@@ -1,0 +1,19 @@
+services:
+  clashctl:
+    build: .
+    container_name: clashctl
+    restart: unless-stopped
+    # host 模式：TUN 接管整台宿主机流量；端口 7890/9090 直接在宿主机上监听
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      ENABLE_TUN: "true"
+      # SUB_URL: "https://你的订阅链接"   # 二选一：订阅链接 或 下方挂载本地配置
+    volumes:
+      - clashctl-data:/opt/clashctl/data
+      - ./config/config.yaml:/config/config.yaml:ro
+
+volumes:
+  clashctl-data:
