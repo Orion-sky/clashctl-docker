@@ -54,8 +54,8 @@ docker compose up -d --build
 docker logs -f clashctl        # 查看启动日志
 ```
 
-> 国内网络构建较慢时可使用 GitHub 加速：
-> `docker compose build --build-arg GH_PROXY=https://gh-proxy.org/`
+- `docker compose up -d --build`：构建镜像并启动容器（网络正常时只需这一条）。
+- 网络受限（Docker Hub / GitHub / apt 访问不了或很慢）时，需要给构建传参数，见下文[网络受限时](#网络受限时docker-hub--github--apt-被屏蔽)。
 
 ## 日常使用
 
@@ -163,14 +163,41 @@ host 模式下 TUN 会修改宿主机路由表。如果你通过 SSH 连接这�
 | `APT_MIRROR` | 空（用默认源） | 替换 apt 源域名，仅对 Debian 系基础镜像有效 | `mirrors.aliyun.com` |
 | `GH_PROXY` | 空 | GitHub 下载加速代理 | `https://gh-proxy.org/` |
 
+传参有两种方式，**二选一**：
+
+**方式 A：命令行传参（分两步）**
+
+`docker compose up` 不支持 `--build-arg`，所以要先单独 `build`，再 `up`：
+
 ```bash
+# 第 1 步：构建（带参数）
 docker compose build \
   --build-arg BASE_IMAGE=docker.m.daocloud.io/library/debian:12-slim \
   --build-arg APT_MIRROR=mirrors.aliyun.com \
   --build-arg GH_PROXY=https://gh-proxy.org/
+
+# 第 2 步：启动（不要加 --build，否则会不带参数重新构建）
+docker compose up -d
 ```
 
-也可以直接写在 `docker-compose.yml` 的 `build.args` 中（文件里已列出，按需取消注释）。
+**方式 B：写进 `docker-compose.yml`（一条命令）**
+
+编辑 `docker-compose.yml` 的 `build.args`，把需要的参数改成实际值（文件里已有注释示例，改完后不用再传命令行参数）：
+
+```yaml
+    build:
+      context: .
+      args:
+        BASE_IMAGE: docker.m.daocloud.io/library/debian:12-slim
+        APT_MIRROR: mirrors.aliyun.com
+        GH_PROXY: https://gh-proxy.org/
+```
+
+之后仍然只用：
+
+```bash
+docker compose up -d --build
+```
 
 ### 离线分发：在能联网的机器上构建，导出到目标机器
 
