@@ -153,6 +153,50 @@ host 模式下 TUN 会修改宿主机路由表。如果你通过 SSH 连接这�
 - 配置须能被当前 mihomo 版本接受。例如 `global-client-fingerprint` 已被移除（改在节点上设置 `client-fingerprint`）；`GEOSITE` 规则中的名称必须存在于 `geosite.dat`，否则内核会启动失败。
 - 订阅 / 配置只在**首次**导入。之后要修改，用 `clashctl sub` 命令，或执行 `docker compose down -v` 清空数据卷后重新启动（会丢失所有已保存的订阅与设置）。
 
+## 网络受限时（Docker Hub / GitHub / apt 被屏蔽）
+
+构建过程会访问三类地址：基础镜像（Docker Hub）、apt 源、GitHub（下载 clashctl 与内核）。可通过构建参数分别替换：
+
+| 参数 | 默认值 | 作用 | 示例 |
+| --- | --- | --- | --- |
+| `BASE_IMAGE` | `debian:12-slim` | 基础镜像，可换成镜像代理地址或本地已有的 Debian 系镜像 | `docker.m.daocloud.io/library/debian:12-slim` |
+| `APT_MIRROR` | 空（用默认源） | 替换 apt 源域名，仅对 Debian 系基础镜像有效 | `mirrors.aliyun.com` |
+| `GH_PROXY` | 空 | GitHub 下载加速代理 | `https://gh-proxy.org/` |
+
+```bash
+docker compose build \
+  --build-arg BASE_IMAGE=docker.m.daocloud.io/library/debian:12-slim \
+  --build-arg APT_MIRROR=mirrors.aliyun.com \
+  --build-arg GH_PROXY=https://gh-proxy.org/
+```
+
+也可以直接写在 `docker-compose.yml` 的 `build.args` 中（文件里已列出，按需取消注释）。
+
+### 离线分发：在能联网的机器上构建，导出到目标机器
+
+镜像里已包含内核、yq 和面板，目标机器无需再访问外网：
+
+```bash
+# 能联网的机器
+docker compose build
+docker save clashctl-docker-clashctl:latest | gzip > clashctl.tar.gz
+
+# 拷贝到目标机器（scp / U 盘）后
+gunzip -c clashctl.tar.gz | docker load
+```
+
+然后把 `docker-compose.yml` 中的 `build:` 整段换成：
+
+```yaml
+    image: clashctl-docker-clashctl:latest
+```
+
+再 `docker compose up -d` 即可。注意：镜像按构建机的 CPU 架构生成（x86_64 / arm64），目标机器架构不同则需要在对应架构上重新构建。
+
+### 给 Docker 配置镜像加速（可选）
+
+在 `/etc/docker/daemon.json` 中加入 `registry-mirrors` 后执行 `sudo systemctl restart docker`，之后所有镜像拉取都会走该加速地址。
+
 ## 常见问题
 
 **日志提示"订阅无效 / 原生配置验证失败"**

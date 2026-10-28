@@ -1,6 +1,15 @@
 services:
   clashctl:
-    build: .
+    build:
+      context: .
+      args:
+        # 网络受限时按需取消注释（也可用 --build-arg 传入）
+        # BASE_IMAGE: docker.m.daocloud.io/library/debian:12-slim
+        # APT_MIRROR: mirrors.aliyun.com
+        # GH_PROXY: https://gh-proxy.org/
+        BASE_IMAGE: debian:12-slim
+        APT_MIRROR: ""
+        GH_PROXY: ""
     container_name: clashctl
     restart: unless-stopped
     # host 模式：TUN 接管整台宿主机流量；端口 7890/9090 直接在宿主机上监听
