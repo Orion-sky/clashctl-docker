@@ -12,6 +12,15 @@ elif [ -f /config/config.yaml ]; then
     clashctl sub add --use "file:///config/config.yaml" || echo "[entrypoint] 本地配置添加失败（可能已存在）"
 fi
 
+# 内核不支持 IPv6 策略路由（如 Jetson L4T 缺 CONFIG_IPV6_MULTIPLE_TABLES）时，
+# strict-route 会添加 IPv6 规则而失败（add rule 0/8: address family not supported），自动关闭
+MIXIN="$CLASHCTL_HOME/data/mixin.yaml"
+if [ -f "$MIXIN" ] && ! ip -6 rule >/dev/null 2>&1; then
+    echo "[entrypoint] 内核不支持 IPv6 策略路由，关闭 tun.strict-route 与 ipv6"
+    sed -i 's/^\(\s*\)strict-route:\s*true/\1strict-route: false/' "$MIXIN"
+    grep -q '^ipv6:' "$MIXIN" || sed -i '1i ipv6: false' "$MIXIN"
+fi
+
 clashctl start || { echo "[entrypoint] 内核启动失败"; exit 1; }
 
 if [ "${ENABLE_TUN:-true}" = true ]; then

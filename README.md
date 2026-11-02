@@ -232,6 +232,9 @@ gunzip -c clashctl.tar.gz | docker load
 **`TUN 开启失败`**
 确认 `cap_add: [NET_ADMIN]` 与 `/dev/net/tun` 设备已配置，并且宿主机存在 `/dev/net/tun`。
 
+**日志出现 `Start TUN listening error: configure tun interface: add rule 0/8: address family not supported by protocol`**
+宿主机内核不支持 IPv6 策略路由（如 Jetson L4T 内核 `# CONFIG_IPV6_MULTIPLE_TABLES is not set`，可用 `ip -6 rule` 验证），`strict-route: true` 会添加 IPv6 规则而失败。入口脚本检测到该情况会自动把 `data/mixin.yaml` 中的 `strict-route` 改为 `false` 并加上 `ipv6: false`。代价是 IPv6 流量可能绕过 TUN。
+
 **`clashctl status` 显示"已选订阅：未选择"**
 使用本地配置文件导入时的显示问题，不影响实际使用，以出口 IP 验证为准。
 
