@@ -224,6 +224,59 @@ gunzip -c clashctl.tar.gz | docker load
 
 在 `/etc/docker/daemon.json` 中加入 `registry-mirrors` 后执行 `sudo systemctl restart docker`，之后所有镜像拉取都会走该加速地址。
 
+## 排障：host 模式下容器里能上网，宿主机 `curl` 却是空的
+
+**现象**：容器内 `curl https://www.google.com` 返回 200，宿主机上 `curl http://www.google.com` 返回 `Empty reply from server`（输出为空），`curl https://...` 则 TLS 握手被断开。`ip link` 里能看到 TUN 网卡，`ip rule` 里也有 TUN 的策略路由，路由本身没有问题。
+
+**原因**：宿主机的 DNS 解析被污染。
+
+host 模式下容器和宿主机共用同一套网络，所以路由一样，差别只在域名解析：
+
+- mihomo 的 `dns-hijack` 会劫持经过 TUN 的 53 端口查询，返回 fake-ip（`198.18.x.x`）。
+- 但 `systemd-resolved` 的查询套接字绑定在物理网卡（如 `enp7s0`）上，不走 TUN 的策略路由，直接发给路由器的上游 DNS，拿到被污染的假地址（例如 A 记录 `104.244.42.197`、AAAA 记录 `2001::1`）。
+- 宿主机的 `curl` 优先连被污染的 `2001::1`，对端直接断开，表现为 `Empty reply`。容器里的 `curl` 碰巧先连了 IPv4 地址，所以看起来能通，这只是巧合。
+
+**排查步骤**（都不会修改系统设置）：
+
+```bash
+# 1. TUN 本身是否生效
+ip rule                               # 应有 lookup 2022 等规则
+ip route show table 2022              # 应有 default via ... dev clashctl
+
+# 2. 宿主机 DNS 当前走谁、结果是否被污染
+resolvectl status                     # 看 Current DNS Server
+resolvectl query --cache=no www.google.com   # 返回 104.x / 2001::1 等即被污染
+
+# 3. 对比：直接 dig 路由器（会被 TUN 劫持）和 resolved 的结果
+dig +short www.google.com @192.168.5.1       # 得到 198.18.x.x 说明劫持正常
+dig +short www.google.com @127.0.0.53        # 得到 104.x / 2001::1 说明 resolved 绕过了劫持
+
+# 4. 确认 mihomo 自己的 DNS 可用
+dig +short www.google.com A @127.0.0.1 -p 1053   # 应得到 198.18.x.x
+```
+
+如果第 3 步两个结果不同，就是这个问题。
+
+**修复**：让 `systemd-resolved` 直接使用 mihomo 的 DNS（本机回环地址，不经过网卡）。需要 systemd ≥ 247（支持 `地址:端口` 写法）：
+
+```bash
+sudo mkdir -p /etc/systemd/resolved.conf.d
+printf '[Resolve]\nDNS=127.0.0.1:1053\nDomains=~.\n' | sudo tee /etc/systemd/resolved.conf.d/clash.conf
+sudo resolvectl revert enp7s0          # 网卡名按实际情况替换，去掉之前可能手动设的临时 DNS
+sudo systemctl restart systemd-resolved
+
+resolvectl query www.google.com        # 应返回 198.18.x.x
+curl -I http://www.google.com
+```
+
+> 粘贴多行 heredoc 时，结束标记 `EOF` 必须顶格，带缩进会导致 shell 一直等待输入，所以上面用了 `printf` 单行写法。
+
+**注意**：
+
+- 宿主机的 DNS 此后依赖 clashctl 容器。容器停止或启动失败时，宿主机会解析不了域名（容器已设 `restart: unless-stopped`，正常会自动拉起）。恢复办法：删除 `/etc/systemd/resolved.conf.d/clash.conf` 后 `sudo systemctl restart systemd-resolved`。
+- 在路由器上改 DNS 解决不了：污染来自路由器的上游；而且 DHCP 不能指定端口，若把 mihomo 改到 53 端口让局域网其他设备也用它，它们会拿到只有本机 TUN 才认识的 fake-ip，反而连不上。
+- 不是用 `systemd-resolved` 的发行版，原理相同：确保系统 DNS 查询最终进入 mihomo 的 DNS（`127.0.0.1:1053`）或被 TUN 劫持。
+
 ## 常见问题
 
 **日志提示"订阅无效 / 原生配置验证失败"**
@@ -237,6 +290,9 @@ gunzip -c clashctl.tar.gz | docker load
 
 **`clashctl status` 显示"已选订阅：未选择"**
 使用本地配置文件导入时的显示问题，不影响实际使用，以出口 IP 验证为准。
+
+**宿主机 `curl` 返回空 / 解析到奇怪的 IP（104.244.42.197、2001::1）**
+见上文[排障](#排障host-模式下容器里能上网宿主机-curl-却是空的)。
 
 **容器反复重启**
 `docker logs clashctl` 查看原因；内核退出时容器按设计会一并退出，由 `restart: unless-stopped` 拉起。
